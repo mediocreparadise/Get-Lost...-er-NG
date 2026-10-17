@@ -1,5 +1,5 @@
 // In-game settings pages for SKSE Menu Framework.
-// The SDK header comes from the lib/SKSE-Menu-Framework-3-API submodule (see .gitmodules / xmake.lua).
+// Put the framework's SDK header next to this file as src/SKSEMenuFramework.h.
 
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
