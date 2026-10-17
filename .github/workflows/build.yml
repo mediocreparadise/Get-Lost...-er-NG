@@ -1,0 +1,57 @@
+name: Build BlankMap
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Update CommonLibSSE-NG to latest (needed for 1.7.x runtime)
+        run: |
+          git submodule update --init --remote --recursive lib/commonlibsse-ng
+          git -C lib/commonlibsse-ng log -1 --format="CommonLibSSE-NG commit: %H %cd"
+
+      - name: Set up xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: latest
+
+      - name: Cache xmake packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/AppData/Local/.xmake
+            ${{ github.workspace }}/.xmake
+          key: xmake-v2-${{ runner.os }}-${{ hashFiles('xmake.lua') }}
+
+      - name: Configure
+        run: xmake f -y -m releasedbg
+
+      - name: Build
+        run: xmake build -y -v
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem -Path build -Recurse -Filter BlankMap.dll | Select-Object -First 1
+          if (-not $dll) { throw "BlankMap.dll not found - check the target name in xmake.lua" }
+          $dest = "package/Data/SKSE/Plugins"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          Copy-Item $dll.FullName $dest
+          Copy-Item "Data/SKSE/Plugins/BlankMap.ini" $dest
+          Get-ChildItem -Recurse package
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: BlankMap
+          path: package/

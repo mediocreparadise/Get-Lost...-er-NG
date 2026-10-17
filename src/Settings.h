@@ -1,0 +1,56 @@
+#pragma once
+
+#include <cstdint>
+#include <map>
+#include <mutex>
+#include <set>
+#include <string>
+#include <vector>
+
+// One checkbox in the menu / one INI key under [Hide].
+struct MarkerGroup
+{
+	const char*                key;    // lowercase INI key
+	const char*                label;  // shown in the menu
+	std::vector<std::uint16_t> ids;    // MapMarkerData::type values
+};
+const std::vector<MarkerGroup>& MarkerGroups();
+
+struct Config
+{
+	Config();
+
+	std::map<std::string, bool> groupHide;  // group key -> hidden?
+	std::string                 keepRaw;    // "Whiterun;Riverwood"
+	std::string                 hideRaw;
+
+	// Derived by RebuildDerived()
+	std::set<std::uint16_t> hiddenTypes;
+	std::set<std::string>   keepNames;
+	std::set<std::string>   hideNames;
+
+	bool  recenter{ true };  // world map camera
+	bool  useFixed{ false };
+	float fixedX{ 0.0f };
+	float fixedY{ 0.0f };
+	bool  localRecenter{ true };  // local map camera
+	bool  localCorner{ false };
+
+	bool hideCompass{ false };
+	bool compassOnly{ false };  // false: compass + shout meter share a container
+
+	bool logDecisions{ false };
+};
+
+extern Config               g_config;
+extern std::recursive_mutex g_configMutex;  // guards g_config (game thread + render thread)
+extern std::uint32_t        g_configVersion;  // bumped whenever the config is (re)loaded
+
+std::string ToLower(std::string s);
+std::string CompassPath();
+
+void LoadConfig();             // base INI, then menu INI on top
+void MaybeReloadConfig();      // reloads if either file changed on disk
+void RebuildDerived();         // call after editing groupHide / keepRaw / hideRaw
+void SaveMenuConfig();         // writes Data/SKSE/Plugins/BlankMap_Menu.ini
+void ResetConfigToDefaults();
