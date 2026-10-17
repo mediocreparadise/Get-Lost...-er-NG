@@ -1,4 +1,4 @@
-// Blank Map - hide world map markers (except the player's own), recenter map cameras.
+// Blank Map - hide world map markers (except the player's own), recenter / remember the map camera.
 // SKSE / CommonLibSSE-NG. Original implementation.
 //
 // Settings: Data/SKSE/Plugins/BlankMap.ini, then overridden by BlankMap_Menu.ini
@@ -10,6 +10,7 @@
 #include <spdlog/sinks/basic_file_sink.h>
 
 #include <atomic>
+#include <cmath>
 #include <concepts>
 #include <string>
 #include <vector>
@@ -24,6 +25,7 @@ namespace
 	// ---- Map camera recentering ------------------------------------------
 	std::atomic<int> g_pendingFrames{ 0 };
 	std::atomic<int> g_transitionCap{ 0 };  // safety cap while the open animation is still running
+	std::atomic<bool> g_mapOpen{ false };
 	bool             g_loggedCamera{ false };
 	bool             g_loggedLocal{ false };
 
@@ -70,22 +72,100 @@ namespace
 			state->translation.y = ty - state->initialPosition.y;
 		}
 
-		static void OnFrame(RE::MapMenu* a_menu)
+		// ---- last-position memory ---------------------------------------
+		// What we last wrote to the camera. "The player moved it" is measured from here.
+		static inline bool  s_haveApplied{ false };
+		static inline float s_appliedX{ 0.0f }, s_appliedY{ 0.0f };
+		// Where the player has panned to since the map settled.
+		static inline bool  s_haveSeen{ false };
+		static inline float s_seenX{ 0.0f }, s_seenY{ 0.0f }, s_seenZ{ 0.0f };
+		static inline bool  s_loggedTrack{ false };
+
+		static void BeginSession()
 		{
-			if (g_pendingFrames.load() <= 0) return;
+			s_haveApplied = false;
+			s_haveSeen = false;
+			s_loggedTrack = false;
+			g_mapOpen.store(true);
+		}
+
+		// Called when the map closes: persist the last place the player looked at.
+		static void EndSession()
+		{
+			g_mapOpen.store(false);
+			if (!s_haveSeen) return;  // never panned: the saved position stays as it was
+			{
+				std::lock_guard lk(g_configMutex);
+				g_mapState = { true, s_seenX, s_seenY, s_seenZ };
+			}
+			SaveMapState();
+			logger::info("Saved map position ({:.1f}, {:.1f}, {:.1f})", s_seenX, s_seenY, s_seenZ);
+			s_haveSeen = false;
+		}
+
+		// After our overwrite window is over, watch for the player panning around.
+		// There are two camera states and I don't know which one is live, so the one that
+		// has moved furthest from what we wrote is taken to be the live one.
+		static void TrackPosition(RE::MapMenu* a_menu)
+		{
+			if (!g_mapOpen.load() || !s_haveApplied) return;
 
 			auto* rd = a_menu->GetRuntimeData2();  // null on VR
 			if (!rd || !rd->controlsReady) return;
 
-			bool  recenter, useFixed, localRecenter;
-			float fixedX, fixedY;
+			int   best = -1;
+			float bestDist = 1.0f;  // ignore sub-unit jitter
+			for (int i = 0; i < 2; ++i) {
+				auto* world = rd->camera.unk68[i].get();
+				if (!world) continue;
+				const float dx = world->currentPosition.x - s_appliedX;
+				const float dy = world->currentPosition.y - s_appliedY;
+				const float d = std::sqrt(dx * dx + dy * dy);
+				if (d > bestDist) {
+					bestDist = d;
+					best = i;
+				}
+			}
+			if (best < 0) return;
+
+			auto* world = rd->camera.unk68[best].get();
+			s_seenX = world->currentPosition.x;
+			s_seenY = world->currentPosition.y;
+			s_seenZ = world->currentPosition.z;
+			s_haveSeen = true;
+
+			if (!s_loggedTrack) {
+				s_loggedTrack = true;
+				logger::info("Tracking player pan: live state={} moved {:.1f} units from ({:.1f},{:.1f}); transition active={}",
+					best, bestDist, s_appliedX, s_appliedY, rd->camera.unk80.get() != nullptr);
+			}
+		}
+
+		static void OnFrame(RE::MapMenu* a_menu)
+		{
+			if (g_pendingFrames.load() <= 0) {
+				TrackPosition(a_menu);
+				return;
+			}
+
+			auto* rd = a_menu->GetRuntimeData2();  // null on VR
+			if (!rd || !rd->controlsReady) return;
+
+			bool  recenter, localRecenter, rememberZoom, savedValid;
+			int   mode;
+			float fixedX, fixedY, savedX, savedY, savedZ;
 			{
 				std::lock_guard lk(g_configMutex);
 				recenter = g_config.recenter;
-				useFixed = g_config.useFixed;
+				mode = g_config.startMode;
+				rememberZoom = g_config.rememberZoom;
 				localRecenter = g_config.localRecenter;
 				fixedX = g_config.fixedX;
 				fixedY = g_config.fixedY;
+				savedValid = g_mapState.valid;
+				savedX = g_mapState.x;
+				savedY = g_mapState.y;
+				savedZ = g_mapState.z;
 			}
 
 			if (recenter) {
@@ -93,18 +173,28 @@ namespace
 					auto* world = state.get();
 					if (!world) continue;
 
-					float x = fixedX;
-					float y = fixedY;
-					if (!useFixed) {
+					float x = 0.0f, y = 0.0f, z = world->currentPosition.z;
+					bool  applyZ = false;
+					if (mode == 1) {  // fixed point
+						x = fixedX;
+						y = fixedY;
+					} else if (mode == 2 && savedValid) {  // last position
+						x = savedX;
+						y = savedY;
+						if (rememberZoom) {
+							z = savedZ;
+							applyZ = true;
+						}
+					} else {  // map center (also the fallback when nothing is saved yet)
 						if (!world->mapData) continue;
 						x = (world->mapData->minimumCoordinates.x + world->mapData->maximumCoordinates.x) * 0.5f;
 						y = (world->mapData->minimumCoordinates.y + world->mapData->maximumCoordinates.y) * 0.5f;
 					}
 
 					if (!g_loggedCamera) {
-						logger::info("Camera before: pos=({:.1f},{:.1f},{:.1f}) -> target=({:.1f},{:.1f}); transition active={}",
+						logger::info("Camera before: pos=({:.1f},{:.1f},{:.1f}) -> target=({:.1f},{:.1f}) mode={} saved={}; transition active={}",
 							world->currentPosition.x, world->currentPosition.y, world->currentPosition.z,
-							x, y, rd->camera.unk80.get() != nullptr);
+							x, y, mode, savedValid, rd->camera.unk80.get() != nullptr);
 						if (world->mapData) {
 							logger::info("Map bounds: min=({:.1f},{:.1f}) max=({:.1f},{:.1f})",
 								world->mapData->minimumCoordinates.x, world->mapData->minimumCoordinates.y,
@@ -113,6 +203,11 @@ namespace
 					}
 					world->currentPosition.x = x;
 					world->currentPosition.y = y;
+					if (applyZ) world->currentPosition.z = z;
+
+					s_appliedX = x;
+					s_appliedY = y;
+					s_haveApplied = true;
 				}
 				g_loggedCamera = true;
 			}
@@ -192,6 +287,7 @@ namespace
 			if (a_event && a_event->menuName == RE::MapMenu::MENU_NAME) {
 				if (a_event->opening) {
 					MaybeReloadConfig();
+					MapCameraHook::BeginSession();
 					Hide();
 					bool any;
 					{
@@ -207,6 +303,7 @@ namespace
 				} else {
 					g_pendingFrames.store(0);
 					g_transitionCap.store(0);
+					MapCameraHook::EndSession();
 					Restore();
 				}
 			}
@@ -301,6 +398,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 	SKSE::Init(a_skse);
 	SetupLog();
 	LoadConfig();
+	LoadMapState();
 
 	SKSE::GetMessagingInterface()->RegisterListener([](SKSE::MessagingInterface::Message* msg) {
 		if (msg->type == SKSE::MessagingInterface::kDataLoaded) {

@@ -119,14 +119,20 @@ namespace
 		if (ui::Checkbox("Don't open the map on me##world", &g_config.recenter)) g_dirty = true;
 		Tip("The world map opens at a chosen view instead of on the player.");
 
-		int startView = g_config.useFixed ? 1 : 0;
+		int startView = g_config.startMode;
 		ui::BeginDisabled(!g_config.recenter);
-		if (ui::Combo("Start view##world", &startView, "Map center\0Fixed point\0")) {
-			g_config.useFixed = (startView == 1);
+		if (ui::Combo("Start view##world", &startView, "Map center\0Fixed point\0Last position\0")) {
+			g_config.startMode = startView;
 			g_dirty = true;
 		}
+		Tip("Last position: the map opens where you left it. The first time (nothing saved yet) it opens at the map center.");
 
-		ui::BeginDisabled(!g_config.useFixed);
+		ui::BeginDisabled(g_config.startMode != 2);
+		if (ui::Checkbox("Also remember zoom height (experimental)", &g_config.rememberZoom)) g_dirty = true;
+		if (ui::Button("Forget saved position")) ClearMapState();
+		ui::EndDisabled();
+
+		ui::BeginDisabled(g_config.startMode != 1);
 		if (ui::DragFloat("Fixed point X", &g_config.fixedX, 100.0f, -200000.0f, 200000.0f, "%.0f")) g_dirty = true;
 		if (ui::DragFloat("Fixed point Y", &g_config.fixedY, 100.0f, -200000.0f, 200000.0f, "%.0f")) g_dirty = true;
 		ui::EndDisabled();

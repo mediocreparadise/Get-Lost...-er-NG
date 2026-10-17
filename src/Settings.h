@@ -30,7 +30,8 @@ struct Config
 	std::set<std::string>   hideNames;
 
 	bool  recenter{ true };  // world map camera
-	bool  useFixed{ false };
+	int   startMode{ 2 };  // 0 = map center, 1 = fixed point, 2 = last position (falls back to center)
+	bool  rememberZoom{ false };  // last-position mode also restores camera height (experimental)
 	float fixedX{ 0.0f };
 	float fixedY{ 0.0f };
 	bool  localRecenter{ true };  // local map camera
@@ -41,6 +42,17 @@ struct Config
 	bool logDecisions{ false };
 };
 
+// Where the world map camera was when the player last closed the map.
+// Kept apart from Config so reloading settings never wipes it.
+struct MapState
+{
+	bool  valid{ false };
+	float x{ 0.0f };
+	float y{ 0.0f };
+	float z{ 0.0f };
+};
+
+extern MapState             g_mapState;  // guarded by g_configMutex
 extern Config               g_config;
 extern std::recursive_mutex g_configMutex;  // guards g_config (game thread + render thread)
 extern std::uint32_t        g_configVersion;  // bumped whenever the config is (re)loaded
@@ -52,3 +64,7 @@ void MaybeReloadConfig();      // reloads if either file changed on disk
 void RebuildDerived();         // call after editing groupHide / keepRaw / hideRaw
 void SaveMenuConfig();         // writes Data/SKSE/Plugins/BlankMap_Menu.ini
 void ResetConfigToDefaults();
+
+void LoadMapState();   // Data/SKSE/Plugins/BlankMap_State.ini (written when the map closes)
+void SaveMapState();
+void ClearMapState();

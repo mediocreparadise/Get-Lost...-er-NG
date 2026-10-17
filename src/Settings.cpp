@@ -13,6 +13,7 @@ namespace logger = SKSE::log;
 namespace fs = std::filesystem;
 
 Config               g_config;
+MapState             g_mapState;
 std::recursive_mutex g_configMutex;
 std::uint32_t        g_configVersion{ 0 };
 
@@ -20,6 +21,7 @@ namespace
 {
 	const char* kBaseIni = "Data/SKSE/Plugins/BlankMap.ini";       // hand-edited, ships with the mod
 	const char* kMenuIni = "Data/SKSE/Plugins/BlankMap_Menu.ini";  // written by the in-game menu, loaded last
+	const char* kStateIni = "Data/SKSE/Plugins/BlankMap_State.ini";  // last map position, written automatically
 
 	std::int64_t g_stamp{ -1 };
 
@@ -85,7 +87,10 @@ namespace
 					else if (key == "keepplayermarker") g_config.keepPlayerMarker = IsTrue(val);
 				} else if (section == "camera") {
 					if (key == "recenter") g_config.recenter = IsTrue(val);
-					else if (key == "mode") g_config.useFixed = (ToLower(val) == "fixed" || val == "1");
+					else if (key == "mode") {
+						const auto m = ToLower(val);
+						g_config.startMode = (m == "fixed" || m == "1") ? 1 : (m == "last" || m == "2") ? 2 : 0;
+					} else if (key == "rememberzoom") g_config.rememberZoom = IsTrue(val);
 					else if (key == "startx") g_config.fixedX = std::stof(val);
 					else if (key == "starty") g_config.fixedY = std::stof(val);
 					else if (key == "localmaprecenter") g_config.localRecenter = IsTrue(val);
@@ -198,7 +203,8 @@ void SaveMenuConfig()
 		f << g.key << '=' << ((it != g_config.groupHide.end() && it->second) ? 1 : 0) << '\n';
 	}
 	f << "\n[Names]\nKeepLocations=" << g_config.keepRaw << "\nHideLocations=" << g_config.hideRaw << '\n';
-	f << "\n[Camera]\nRecenter=" << g_config.recenter << "\nMode=" << (g_config.useFixed ? "fixed" : "center")
+	f << "\n[Camera]\nRecenter=" << g_config.recenter << "\nMode=" << (g_config.startMode == 1 ? "fixed" : g_config.startMode == 2 ? "last" : "center")
+	  << "\nRememberZoom=" << g_config.rememberZoom
 	  << "\nStartX=" << g_config.fixedX << "\nStartY=" << g_config.fixedY
 	  << "\nLocalMapRecenter=" << g_config.localRecenter << "\nLocalMapMode=" << (g_config.localCorner ? "corner" : "center") << '\n';
 	f << "\n[General]\nLogDecisions=" << g_config.logDecisions << "\nKeepPlayerMarker=" << g_config.keepPlayerMarker << '\n';
@@ -213,4 +219,57 @@ void ResetConfigToDefaults()
 	RebuildDerived();
 	++g_configVersion;
 	SaveMenuConfig();
+}
+
+// ---- Remembered map position -------------------------------------------
+
+void LoadMapState()
+{
+	std::lock_guard lk(g_configMutex);
+	g_mapState = MapState{};
+
+	std::ifstream f(kStateIni);
+	if (!f) return;
+
+	std::string line;
+	bool        valid = false;
+	float       x = 0, y = 0, z = 0;
+	while (std::getline(f, line)) {
+		line = Trim(line);
+		const auto eq = line.find('=');
+		if (eq == std::string::npos || line[0] == ';' || line[0] == '[') continue;
+		const auto key = ToLower(Trim(line.substr(0, eq)));
+		const auto val = Trim(line.substr(eq + 1));
+		try {
+			if (key == "valid") valid = IsTrue(val);
+			else if (key == "x") x = std::stof(val);
+			else if (key == "y") y = std::stof(val);
+			else if (key == "z") z = std::stof(val);
+		} catch (...) {
+			logger::warn("Bad value in {}: {}", kStateIni, line);
+		}
+	}
+	g_mapState = { valid, x, y, z };
+	if (valid) logger::info("Loaded last map position ({:.1f}, {:.1f}, {:.1f})", x, y, z);
+}
+
+void SaveMapState()
+{
+	std::lock_guard lk(g_configMutex);
+	std::ofstream   f(kStateIni, std::ios::trunc);
+	if (!f) {
+		logger::warn("Could not write {}", kStateIni);
+		return;
+	}
+	f << "; Last world map position. Written automatically when the map closes.\n[Last]\nValid=" << g_mapState.valid
+	  << "\nX=" << g_mapState.x << "\nY=" << g_mapState.y << "\nZ=" << g_mapState.z << '\n';
+}
+
+void ClearMapState()
+{
+	std::lock_guard lk(g_configMutex);
+	g_mapState = MapState{};
+	std::error_code ec;
+	fs::remove(kStateIni, ec);
+	logger::info("Forgot the saved map position");
 }
