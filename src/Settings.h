@@ -37,6 +37,11 @@ struct Config
 	bool  localRecenter{ true };  // local map camera
 	bool  localCorner{ false };
 
+	// Black screen over the map while the open animation / recentering runs.
+	bool  blackout{ true };
+	float blackoutHold{ 0.75f };  // seconds to stay black after the recenter window ends
+	float blackoutFade{ 0.35f };  // seconds to fade back in
+
 	bool keepPlayerMarker{ true };  // never hide the player's own custom map marker
 
 	bool logDecisions{ false };

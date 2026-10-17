@@ -9,6 +9,7 @@
 #include <SKSE/SKSE.h>
 #include <spdlog/sinks/basic_file_sink.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <concepts>
@@ -34,7 +35,8 @@ namespace
 		static void Thunk(RE::MapMenu* a_this, float a_interval, std::uint32_t a_time)
 		{
 			func(a_this, a_interval, a_time);
-			OnFrame(a_this);
+			UpdateCover(a_this, a_interval);
+			OnFrame(a_this, a_interval);
 		}
 
 		static inline REL::Relocation<decltype(Thunk)> func;
@@ -86,6 +88,7 @@ namespace
 			s_haveApplied = false;
 			s_haveSeen = false;
 			s_loggedTrack = false;
+			ResetCover();
 			g_mapOpen.store(true);
 		}
 
@@ -141,7 +144,95 @@ namespace
 			}
 		}
 
-		static void OnFrame(RE::MapMenu* a_menu)
+		// ---- blackout cover ------------------------------------------------
+		// A black rectangle drawn in the map menu's own Scaleform movie, above the 3D map.
+		// It is up from the first frame and only fades out once the recenter window has ended
+		// (open animation finished) plus a hold time, so the pan/zoom toward the player is never seen.
+		static inline bool  s_coverWanted{ false };
+		static inline bool  s_coverMade{ false };
+		static inline bool  s_coverDone{ false };
+		static inline float s_coverTimer{ 0.0f };  // seconds since the recenter window ended
+
+		static void ResetCover()
+		{
+			s_coverWanted = false;
+			s_coverMade = false;
+			s_coverDone = false;
+			s_coverTimer = 0.0f;
+		}
+
+		static bool MakeCover(RE::GFxMovieView* a_mv)
+		{
+			RE::GFxValue root;
+			if (!a_mv->GetVariable(&root, "_root") || !root.IsObject()) return false;
+
+			RE::GFxValue args[2];
+			args[0] = "BlankMapCover";
+			args[1] = 30000.0;  // depth: above everything the menu draws
+			RE::GFxValue mc;
+			root.Invoke("createEmptyMovieClip", &mc, args, 2);
+			if (!mc.IsObject()) return false;
+
+			// Oversized so it covers the stage whatever the aspect ratio / safe-zone offset.
+			constexpr double lo = -4000.0, hi = 6000.0;
+			RE::GFxValue     fill[2];
+			fill[0] = 0.0;    // 0x000000
+			fill[1] = 100.0;  // alpha
+			mc.Invoke("beginFill", nullptr, fill, 2);
+			const double pts[5][2] = { { lo, lo }, { hi, lo }, { hi, hi }, { lo, hi }, { lo, lo } };
+			RE::GFxValue p[2];
+			p[0] = pts[0][0];
+			p[1] = pts[0][1];
+			mc.Invoke("moveTo", nullptr, p, 2);
+			for (int i = 1; i < 5; ++i) {
+				p[0] = pts[i][0];
+				p[1] = pts[i][1];
+				mc.Invoke("lineTo", nullptr, p, 2);
+			}
+			mc.Invoke("endFill");
+			return true;
+		}
+
+		static void UpdateCover(RE::MapMenu* a_menu, float a_dt)
+		{
+			if (!s_coverWanted || s_coverDone) return;
+
+			auto* mv = a_menu->uiMovie.get();
+			if (!mv) return;
+
+			if (!s_coverMade) {
+				s_coverMade = MakeCover(mv);
+				if (s_coverMade) logger::info("Blackout cover created");
+				else return;  // movie not ready yet; try again next frame
+			}
+
+			float hold, fade;
+			{
+				std::lock_guard lk(g_configMutex);
+				hold = g_config.blackoutHold;
+				fade = (std::max)(g_config.blackoutFade, 0.01f);
+			}
+
+			float alpha = 100.0f;
+			if (g_pendingFrames.load() <= 0) {  // recenter window over: start the hold timer
+				s_coverTimer += a_dt;
+				if (s_coverTimer > hold) {
+					const float t = (s_coverTimer - hold) / fade;
+					alpha = t >= 1.0f ? 0.0f : 100.0f * (1.0f - t);
+				}
+			} else {
+				s_coverTimer = 0.0f;
+			}
+
+			mv->SetVariable("_root.BlankMapCover._alpha", RE::GFxValue(static_cast<double>(alpha)));
+			if (alpha <= 0.0f) {
+				mv->SetVariable("_root.BlankMapCover._visible", RE::GFxValue(false));
+				s_coverDone = true;
+				logger::info("Blackout cover faded out");
+			}
+		}
+
+		static void OnFrame(RE::MapMenu* a_menu, float a_dt)
 		{
 			if (g_pendingFrames.load() <= 0) {
 				TrackPosition(a_menu);
@@ -295,6 +386,10 @@ namespace
 						any = g_config.recenter || g_config.localRecenter;
 					}
 					if (any) {
+						{
+							std::lock_guard lk(g_configMutex);
+							MapCameraHook::s_coverWanted = g_config.blackout;
+						}
 						g_loggedCamera = false;
 						g_loggedLocal = false;
 						g_pendingFrames.store(90);

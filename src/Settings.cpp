@@ -95,6 +95,9 @@ namespace
 					else if (key == "starty") g_config.fixedY = std::stof(val);
 					else if (key == "localmaprecenter") g_config.localRecenter = IsTrue(val);
 					else if (key == "localmapmode") g_config.localCorner = (ToLower(val) == "corner" || val == "1");
+					else if (key == "blackout") g_config.blackout = IsTrue(val);
+					else if (key == "blackouthold") g_config.blackoutHold = (std::max)(0.0f, std::stof(val));
+					else if (key == "blackoutfade") g_config.blackoutFade = (std::max)(0.01f, std::stof(val));
 				}  // (an old [HUD] section from earlier versions is simply ignored)
 			} catch (...) {
 				logger::warn("Bad value for [{}] {}", section, rawKey);
@@ -206,7 +209,9 @@ void SaveMenuConfig()
 	f << "\n[Camera]\nRecenter=" << g_config.recenter << "\nMode=" << (g_config.startMode == 1 ? "fixed" : g_config.startMode == 2 ? "last" : "center")
 	  << "\nRememberZoom=" << g_config.rememberZoom
 	  << "\nStartX=" << g_config.fixedX << "\nStartY=" << g_config.fixedY
-	  << "\nLocalMapRecenter=" << g_config.localRecenter << "\nLocalMapMode=" << (g_config.localCorner ? "corner" : "center") << '\n';
+	  << "\nLocalMapRecenter=" << g_config.localRecenter << "\nLocalMapMode=" << (g_config.localCorner ? "corner" : "center")
+	  << "\nBlackout=" << g_config.blackout << "\nBlackoutHold=" << g_config.blackoutHold
+	  << "\nBlackoutFade=" << g_config.blackoutFade << '\n';
 	f << "\n[General]\nLogDecisions=" << g_config.logDecisions << "\nKeepPlayerMarker=" << g_config.keepPlayerMarker << '\n';
 	f.close();
 	g_stamp = CombinedStamp();  // our own write must not trigger a reload

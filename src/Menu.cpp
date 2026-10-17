@@ -140,6 +140,16 @@ namespace
 		ui::TextDisabled("World units. BlankMap.log prints the map bounds each time you open the map.");
 
 		ui::Spacing();
+		ui::SeparatorText("Open transition");
+		if (ui::Checkbox("Black out the map while it opens", &g_config.blackout)) g_dirty = true;
+		Tip("Hides the map's pan/zoom toward the player behind a black screen.");
+		ui::BeginDisabled(!g_config.blackout);
+		if (ui::SliderFloat("Hold black (seconds)", &g_config.blackoutHold, 0.0f, 3.0f, "%.2f")) g_dirty = true;
+		Tip("Extra time to stay black after the recentering finishes. Raise this if you still see the zoom.");
+		if (ui::SliderFloat("Fade in (seconds)", &g_config.blackoutFade, 0.05f, 2.0f, "%.2f")) g_dirty = true;
+		ui::EndDisabled();
+
+		ui::Spacing();
 		ui::SeparatorText("Local map (interiors)");
 		if (ui::Checkbox("Don't open the local map on me##local", &g_config.localRecenter)) g_dirty = true;
 
