@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <concepts>
 #include <string>
@@ -35,7 +36,7 @@ namespace
 		static void Thunk(RE::MapMenu* a_this, float a_interval, std::uint32_t a_time)
 		{
 			func(a_this, a_interval, a_time);
-			UpdateCover(a_this, a_interval);
+			UpdateCover(a_this);
 			OnFrame(a_this, a_interval);
 		}
 
@@ -151,14 +152,19 @@ namespace
 		static inline bool  s_coverWanted{ false };
 		static inline bool  s_coverMade{ false };
 		static inline bool  s_coverDone{ false };
-		static inline float s_coverTimer{ 0.0f };  // seconds since the recenter window ended
+		using Clock = std::chrono::steady_clock;
+		static inline Clock::time_point s_coverStart{};   // when the cover was created
+		static inline Clock::time_point s_windowEnd{};    // when the recenter window ended
+		static inline bool              s_windowEnded{ false };
+		static inline int               s_coverLogTick{ 0 };
 
 		static void ResetCover()
 		{
 			s_coverWanted = false;
 			s_coverMade = false;
 			s_coverDone = false;
-			s_coverTimer = 0.0f;
+			s_windowEnded = false;
+			s_coverLogTick = 0;
 		}
 
 		static bool MakeCover(RE::GFxMovieView* a_mv)
@@ -193,17 +199,19 @@ namespace
 			return true;
 		}
 
-		static void UpdateCover(RE::MapMenu* a_menu, float a_dt)
+		static void UpdateCover(RE::MapMenu* a_menu)
 		{
 			if (!s_coverWanted || s_coverDone) return;
 
 			auto* mv = a_menu->uiMovie.get();
 			if (!mv) return;
 
+			const auto now = Clock::now();
 			if (!s_coverMade) {
 				s_coverMade = MakeCover(mv);
-				if (s_coverMade) logger::info("Blackout cover created");
-				else return;  // movie not ready yet; try again next frame
+				if (!s_coverMade) return;  // movie not ready yet; try again next frame
+				s_coverStart = now;
+				logger::info("Blackout cover created");
 			}
 
 			float hold, fade;
@@ -212,21 +220,41 @@ namespace
 				hold = g_config.blackoutHold;
 				fade = (std::max)(g_config.blackoutFade, 0.01f);
 			}
+			const auto secs = [](Clock::time_point a, Clock::time_point b) {
+				return std::chrono::duration<float>(b - a).count();
+			};
 
-			float alpha = 100.0f;
-			if (g_pendingFrames.load() <= 0) {  // recenter window over: start the hold timer
-				s_coverTimer += a_dt;
-				if (s_coverTimer > hold) {
-					const float t = (s_coverTimer - hold) / fade;
-					alpha = t >= 1.0f ? 0.0f : 100.0f * (1.0f - t);
+			// Real wall-clock time: the AdvanceMovie interval can be 0 while the game is paused in a menu.
+			if (g_pendingFrames.load() <= 0) {
+				if (!s_windowEnded) {
+					s_windowEnded = true;
+					s_windowEnd = now;
 				}
 			} else {
-				s_coverTimer = 0.0f;
+				s_windowEnded = false;
 			}
 
-			mv->SetVariable("_root.BlankMapCover._alpha", RE::GFxValue(static_cast<double>(alpha)));
+			float alpha = 100.0f;
+			float t = -1.0f;  // seconds into the fade; <0 = still holding
+			if (s_windowEnded) t = secs(s_windowEnd, now) - hold;
+			// Failsafe: never stay black longer than 10 s after creation, whatever the camera is doing.
+			if (secs(s_coverStart, now) > 10.0f + hold) t = (std::max)(t, fade);
+			if (t >= 0.0f) alpha = t >= fade ? 0.0f : 100.0f * (1.0f - t / fade);
+
+			RE::GFxValue mc;
+			if (mv->GetVariable(&mc, "_root.BlankMapCover") && mc.IsObject()) {
+				mc.SetMember("_alpha", RE::GFxValue(static_cast<double>(alpha)));
+				if (alpha <= 0.0f) mc.SetMember("_visible", RE::GFxValue(false));
+			} else {
+				mv->SetVariable("_root.BlankMapCover._alpha", RE::GFxValue(static_cast<double>(alpha)));
+				if (alpha <= 0.0f) mv->SetVariable("_root.BlankMapCover._visible", RE::GFxValue(false));
+			}
+
+			if (++s_coverLogTick % 60 == 1) {
+				logger::info("Blackout: alpha={:.0f} pendingFrames={} windowEnded={} elapsed={:.2f}s",
+					alpha, g_pendingFrames.load(), s_windowEnded, secs(s_coverStart, now));
+			}
 			if (alpha <= 0.0f) {
-				mv->SetVariable("_root.BlankMapCover._visible", RE::GFxValue(false));
 				s_coverDone = true;
 				logger::info("Blackout cover faded out");
 			}
