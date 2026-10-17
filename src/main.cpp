@@ -22,6 +22,7 @@ namespace
 
 	// ---- Map camera recentering ------------------------------------------
 	std::atomic<int> g_pendingFrames{ 0 };
+	std::atomic<int> g_transitionCap{ 0 };  // safety cap while the open animation is still running
 	bool             g_loggedCamera{ false };
 	bool             g_loggedLocal{ false };
 
@@ -115,6 +116,10 @@ namespace
 				g_loggedCamera = true;
 			}
 			if (localRecenter) RecenterLocalMap(a_menu);
+			// The map's open animation (the pan/zoom toward the player) can outlast a fixed frame
+			// window and then resume from our overwritten position. Keep re-applying while it is
+			// still running (hard-capped so a stuck transition can't pin the camera forever).
+			if (rd->camera.unk80.get() != nullptr && g_transitionCap.fetch_sub(1) > 0) return;
 			g_pendingFrames.fetch_sub(1);
 		}
 
@@ -195,10 +200,12 @@ namespace
 					if (any) {
 						g_loggedCamera = false;
 						g_loggedLocal = false;
-						g_pendingFrames.store(30);
+						g_pendingFrames.store(90);
+						g_transitionCap.store(600);
 					}
 				} else {
 					g_pendingFrames.store(0);
+					g_transitionCap.store(0);
 					Restore();
 				}
 			}
