@@ -36,8 +36,7 @@ struct Config
 	bool  localRecenter{ true };  // local map camera
 	bool  localCorner{ false };
 
-	bool hideCompass{ false };
-	bool compassOnly{ false };  // false: compass + shout meter share a container
+	bool keepPlayerMarker{ true };  // never hide the player's own custom map marker
 
 	bool logDecisions{ false };
 };
@@ -47,7 +46,6 @@ extern std::recursive_mutex g_configMutex;  // guards g_config (game thread + re
 extern std::uint32_t        g_configVersion;  // bumped whenever the config is (re)loaded
 
 std::string ToLower(std::string s);
-std::string CompassPath();
 
 void LoadConfig();             // base INI, then menu INI on top
 void MaybeReloadConfig();      // reloads if either file changed on disk

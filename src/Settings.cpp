@@ -21,8 +21,6 @@ namespace
 	const char* kBaseIni = "Data/SKSE/Plugins/BlankMap.ini";       // hand-edited, ships with the mod
 	const char* kMenuIni = "Data/SKSE/Plugins/BlankMap_Menu.ini";  // written by the in-game menu, loaded last
 
-	const char* kCompassBase = "_root.HUDMovieBaseInstance.CompassShoutMeterHolder";
-
 	std::int64_t g_stamp{ -1 };
 
 	std::string Trim(const std::string& s)
@@ -84,6 +82,7 @@ namespace
 					else if (key == "hidelocations") g_config.hideRaw = val;
 				} else if (section == "general") {
 					if (key == "logdecisions") g_config.logDecisions = IsTrue(val);
+					else if (key == "keepplayermarker") g_config.keepPlayerMarker = IsTrue(val);
 				} else if (section == "camera") {
 					if (key == "recenter") g_config.recenter = IsTrue(val);
 					else if (key == "mode") g_config.useFixed = (ToLower(val) == "fixed" || val == "1");
@@ -91,10 +90,7 @@ namespace
 					else if (key == "starty") g_config.fixedY = std::stof(val);
 					else if (key == "localmaprecenter") g_config.localRecenter = IsTrue(val);
 					else if (key == "localmapmode") g_config.localCorner = (ToLower(val) == "corner" || val == "1");
-				} else if (section == "hud") {
-					if (key == "hidecompass") g_config.hideCompass = IsTrue(val);
-					else if (key == "compassonly") g_config.compassOnly = IsTrue(val);
-				}
+				}  // (an old [HUD] section from earlier versions is simply ignored)
 			} catch (...) {
 				logger::warn("Bad value for [{}] {}", section, rawKey);
 			}
@@ -106,14 +102,6 @@ std::string ToLower(std::string s)
 {
 	std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 	return s;
-}
-
-std::string CompassPath()
-{
-	std::lock_guard lk(g_configMutex);
-	std::string     p = kCompassBase;
-	if (g_config.compassOnly) p += ".Compass";
-	return p;
 }
 
 const std::vector<MarkerGroup>& MarkerGroups()
@@ -187,8 +175,8 @@ void LoadConfig()
 	RebuildDerived();
 	g_stamp = CombinedStamp();
 	++g_configVersion;
-	logger::info("Config loaded: {} hidden type ids, hideCompass={}, recenter={}, localRecenter={}",
-		g_config.hiddenTypes.size(), g_config.hideCompass, g_config.recenter, g_config.localRecenter);
+	logger::info("Config loaded: {} hidden type ids, keepPlayerMarker={}, recenter={}, localRecenter={}",
+		g_config.hiddenTypes.size(), g_config.keepPlayerMarker, g_config.recenter, g_config.localRecenter);
 }
 
 void MaybeReloadConfig()
@@ -213,8 +201,7 @@ void SaveMenuConfig()
 	f << "\n[Camera]\nRecenter=" << g_config.recenter << "\nMode=" << (g_config.useFixed ? "fixed" : "center")
 	  << "\nStartX=" << g_config.fixedX << "\nStartY=" << g_config.fixedY
 	  << "\nLocalMapRecenter=" << g_config.localRecenter << "\nLocalMapMode=" << (g_config.localCorner ? "corner" : "center") << '\n';
-	f << "\n[HUD]\nHideCompass=" << g_config.hideCompass << "\nCompassOnly=" << g_config.compassOnly << '\n';
-	f << "\n[General]\nLogDecisions=" << g_config.logDecisions << '\n';
+	f << "\n[General]\nLogDecisions=" << g_config.logDecisions << "\nKeepPlayerMarker=" << g_config.keepPlayerMarker << '\n';
 	f.close();
 	g_stamp = CombinedStamp();  // our own write must not trigger a reload
 }

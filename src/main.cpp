@@ -1,4 +1,4 @@
-// Blank Map - hide world map markers, recenter map cameras, hide compass.
+// Blank Map - hide world map markers (except the player's own), recenter map cameras.
 // SKSE / CommonLibSSE-NG. Original implementation.
 //
 // Settings: Data/SKSE/Plugins/BlankMap.ini, then overridden by BlankMap_Menu.ini
@@ -10,6 +10,7 @@
 #include <spdlog/sinks/basic_file_sink.h>
 
 #include <atomic>
+#include <concepts>
 #include <string>
 #include <vector>
 
@@ -131,51 +132,51 @@ namespace
 		}
 	};
 
-	// ---- HUD: compass hiding + live config reload -----------------------
+	// ---- Live config reload ---------------------------------------------
+	// Piggybacks on the HUD's per-frame update to notice INI edits (~every 2 s).
 	std::uint32_t g_hudFrames{ 0 };
-	bool          g_compassHidden{ false };
 
-	struct HudHook
+	struct ConfigReloadHook
 	{
 		static void Thunk(RE::HUDMenu* a_this, float a_interval, std::uint32_t a_time)
 		{
 			func(a_this, a_interval, a_time);
-			OnFrame(a_this);
+			if (++g_hudFrames % 120 == 0) MaybeReloadConfig();
 		}
 
 		static inline REL::Relocation<decltype(Thunk)> func;
-
-		static void OnFrame(RE::HUDMenu* a_menu)
-		{
-			++g_hudFrames;
-			if (g_hudFrames % 120 == 0) MaybeReloadConfig();  // ~2s: pick up INI edits
-			if (g_hudFrames % 30 != 0) return;
-			if (!a_menu->uiMovie) return;
-
-			bool hide;
-			{
-				std::lock_guard lk(g_configMutex);
-				hide = g_config.hideCompass;
-			}
-			const std::string path = CompassPath() + "._visible";
-			if (hide) {
-				a_menu->uiMovie->SetVariable(path.c_str(), RE::GFxValue(false));
-				g_compassHidden = true;
-			} else if (g_compassHidden) {
-				a_menu->uiMovie->SetVariable(path.c_str(), RE::GFxValue(true));
-				g_compassHidden = false;
-			}
-		}
 
 		static void Install()
 		{
 			REL::Relocation<std::uintptr_t> vtbl{ RE::VTABLE_HUDMenu[0] };
 			func = vtbl.write_vfunc(0x5, Thunk);  // IMenu::AdvanceMovie
-			logger::info("HUD hook installed");
+			logger::info("Config reload hook installed");
 		}
 	};
 
 	// ---- Map marker hiding ----------------------------------------------
+	// Some CommonLibSSE-NG versions name a "player set" marker type; only use it if this one does.
+	template <class E>
+	bool IsPlayerSetType(E a_type)
+	{
+		if constexpr (requires { E::kPlayerSet; }) {
+			return a_type == E::kPlayerSet;
+		} else {
+			return false;
+		}
+	}
+
+	// Same idea for the player's own custom-marker reference on the player's runtime data.
+	template <class R>
+	bool IsPlayerMarkerRef(const R& a_rd, RE::ObjectRefHandle a_handle)
+	{
+		if constexpr (requires { { a_rd.playerMapMarker } -> std::convertible_to<RE::ObjectRefHandle>; }) {
+			return a_rd.playerMapMarker == a_handle;
+		} else {
+			return false;
+		}
+	}
+
 	class MapWatcher : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
 	{
 	public:
@@ -238,18 +239,23 @@ namespace
 			auto* player = RE::PlayerCharacter::GetSingleton();
 			if (!player) return;
 
-			bool logDecisions;
+			bool logDecisions, keepPlayer;
 			{
 				std::lock_guard lk(g_configMutex);
 				logDecisions = g_config.logDecisions;
+				keepPlayer   = g_config.keepPlayerMarker;
 			}
 
-			std::size_t hidden = 0;
+			std::size_t hidden = 0, keptPlayer = 0;
 			for (auto& handle : player->GetPlayerRuntimeData().currentMapMarkers) {
 				auto ref = handle.get();
 				if (!ref) continue;
 				auto* extra = ref->extraList.GetByType<RE::ExtraMapMarker>();
 				if (!extra || !extra->mapData) continue;
+				if (keepPlayer && (IsPlayerMarkerRef(player->GetPlayerRuntimeData(), handle) || IsPlayerSetType(extra->mapData->type.get()))) {
+					++keptPlayer;  // the player's own custom marker: never touched
+					continue;
+				}
 				if (!ShouldHide(extra->mapData)) continue;
 
 				_saved.push_back({ handle, static_cast<std::uint8_t>(extra->mapData->flags.underlying()) });
@@ -260,7 +266,7 @@ namespace
 						static_cast<std::uint16_t>(extra->mapData->type.get()));
 				}
 			}
-			logger::info("Map opened: hid {} markers", hidden);
+			logger::info("Map opened: hid {} markers, kept {} player marker(s) visible", hidden, keptPlayer);
 		}
 
 		void Restore()
@@ -301,7 +307,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 			if (auto* ui = RE::UI::GetSingleton()) {
 				ui->AddEventSink<RE::MenuOpenCloseEvent>(MapWatcher::GetSingleton());
 				MapCameraHook::Install();
-				HudHook::Install();
+				ConfigReloadHook::Install();
 				Menu::Register();  // all plugins are loaded by now, so the framework can be found
 				logger::info("Blank Map ready");
 			}

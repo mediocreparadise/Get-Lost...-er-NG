@@ -148,19 +148,14 @@ namespace
 		SaveIfIdle();
 	}
 
-	void __stdcall RenderHud()
+	void __stdcall RenderGeneral()
 	{
 		std::lock_guard lk(g_configMutex);
 		SyncBuffers();
 
-		ui::SeparatorText("Compass");
-		if (ui::Checkbox("Hide compass", &g_config.hideCompass)) g_dirty = true;
-		Tip("Applies within a second. Unchecking restores it.");
-
-		ui::BeginDisabled(!g_config.hideCompass);
-		if (ui::Checkbox("Compass only (keep shout meter) - experimental", &g_config.compassOnly)) g_dirty = true;
-		Tip("By default the compass and shout meter share one container, so both hide.");
-		ui::EndDisabled();
+		ui::SeparatorText("Player markers");
+		if (ui::Checkbox("Always show my custom map marker", &g_config.keepPlayerMarker)) g_dirty = true;
+		Tip("The marker you place yourself on the map is never hidden. Applies the next time you open the map.");
 
 		ui::Spacing();
 		ui::SeparatorText("Developer");
@@ -185,6 +180,6 @@ void Menu::Register()
 	SKSEMenuFramework::SetSection("Blank Map");
 	SKSEMenuFramework::AddSectionItem("Map Markers", RenderMarkers);
 	SKSEMenuFramework::AddSectionItem("Camera", RenderCamera);
-	SKSEMenuFramework::AddSectionItem("HUD", RenderHud);
+	SKSEMenuFramework::AddSectionItem("General", RenderGeneral);
 	logger::info("Registered with SKSE Menu Framework");
 }
